@@ -1,0 +1,8 @@
+azure-functions
+argparse
+opencv-python
+numpy
+matplotlib
+imutils
+scikit-image
+uuid
