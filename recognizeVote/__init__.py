@@ -11,6 +11,8 @@ import uuid
 import os
 import json
 from azure.storage.blob import BlobServiceClient
+from azure.cosmosdb.table.tableservice import TableService
+from azure.cosmosdb.table.models import Entity
 
 import logging
 
@@ -473,10 +475,11 @@ def get_bytes_from_image(data):
     return byte_im
 
 def upload_files_to_storage(im_orig,im_rotated,vote):
-    filename = str(uuid.uuid4()) + '.jpg'
+    name_id = str(uuid.uuid4())
+    filename =  name_id + '.jpg'
     origFileUrl = upload_to_file_storage(im_orig,'originals',filename)
     voteRecognizedFileUrl = upload_to_file_storage(im_rotated,'vote-'+vote,filename)
-    return origFileUrl,voteRecognizedFileUrl
+    return origFileUrl,voteRecognizedFileUrl,name_id
     
 def upload_to_file_storage(data,container_name,dest_file_name):
     connect_str = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
@@ -484,6 +487,27 @@ def upload_to_file_storage(data,container_name,dest_file_name):
     blob_client = blob_service_client.get_blob_client(container=container_name, blob=dest_file_name)
     blob_client.upload_blob(get_bytes_from_image(data))
     return blob_client.url
+
+def save_vote_to_azure_table(vote, isSigned, isValid, origFileUrl,voteRecognizedFileUrl,name_id):
+    connect_str = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
+    table_service = TableService(connection_string=connect_str)
+    task = create_task(vote, isSigned, isValid, origFileUrl,voteRecognizedFileUrl,name_id)
+    table_service.insert_entity('voteresults', task)
+
+def create_task(vote, isSigned, isValid, origFileUrl,voteRecognizedFileUrl,name_id):
+    task = Entity()
+    task.PartitionKey = 'id'
+    task.RowKey = name_id
+    task.vote = vote
+    task.signed = isSigned
+    task.valid = isValid
+    task.origFileUrl = origFileUrl
+    task.voteRecognizedFileUrl = voteRecognizedFileUrl
+    # add file location
+    # add file datetime
+    return task
+
+
 
 def get_vote_from_document(im_orig):
     
@@ -507,7 +531,9 @@ def get_vote_from_document(im_orig):
 
     isValid = get_if_document_valid(vote,isSigned)
 
-    origFileUrl,voteRecognizedFileUrl = upload_files_to_storage(im_orig,im_rotated,vote)
+    origFileUrl,voteRecognizedFileUrl,name_id = upload_files_to_storage(im_orig,im_rotated,vote)
+
+    save_vote_to_azure_table(vote, isSigned, isValid, origFileUrl,voteRecognizedFileUrl,name_id)
 
     return vote, isSigned, isValid, origFileUrl,voteRecognizedFileUrl
         
