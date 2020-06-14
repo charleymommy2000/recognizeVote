@@ -270,7 +270,7 @@ def get_darkness_level(c):
     return c[2]
 
 def get_yes2no_darkness_ratio(c):
-    ratio = 0
+    ratio = 10000000
     yes_darkness = get_darkness_level(get_yes_checkbox(c))
     no_darkness = get_darkness_level(get_no_checkbox(c))
     if no_darkness != 0:
@@ -278,7 +278,7 @@ def get_yes2no_darkness_ratio(c):
     return ratio      
 
 def get_no2yes_darkness_ratio(c):
-    ratio = 0
+    ratio = 10000000
     yes_darkness = get_darkness_level(get_yes_checkbox(c))
     no_darkness = get_darkness_level(get_no_checkbox(c))
     if yes_darkness != 0:
