@@ -6,3 +6,4 @@ matplotlib
 imutils
 scikit-image
 uuid
+azure-storage-blob

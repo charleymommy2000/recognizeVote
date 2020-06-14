@@ -10,6 +10,7 @@ from skimage.filters import threshold_local
 import uuid
 import os
 import json
+from azure.storage.blob import BlobServiceClient
 
 import logging
 
@@ -18,22 +19,30 @@ import azure.functions as func
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
     logging.info('Python HTTP trigger function processed a request.')
-    
-    image_bytes = req.get_body()
-    img_nparr = np.frombuffer(image_bytes, dtype=np.uint8)
-    img = cv2.imdecode(img_nparr, cv2.IMREAD_COLOR)
 
-    vote, isSigned, isValid = get_vote_from_document(img)
+    img = get_image_from_body(req)
 
-    message = prepare_json_message(vote,isSigned, isValid)
+    vote, isSigned, isValid, origFileUrl,voteRecognizedFileUrl = get_vote_from_document(img)
+
+    message = prepare_json_message(vote,isSigned, isValid, origFileUrl,voteRecognizedFileUrl)
 
     return func.HttpResponse(message, status_code=200)
 
-def prepare_json_message(vote,isSigned,isValid):
+def get_image_from_body(req):
+
+    image_bytes = req.get_body()
+    img_nparr = np.frombuffer(image_bytes, dtype=np.uint8)
+    img = cv2.imdecode(img_nparr, cv2.IMREAD_COLOR)
+    
+    return img
+
+def prepare_json_message(vote,isSigned,isValid,origFileUrl,voteRecognizedFileUrl):
     message = {}
     message['vote'] = vote
     message['signed'] = isSigned
     message['valid'] = isValid
+    message['origFileUrl'] = origFileUrl
+    message['voteRecognizedFileUrl'] = voteRecognizedFileUrl
     return json.dumps(message)
 
 def order_points(pts):
@@ -458,6 +467,24 @@ def get_if_document_valid(vote,isSigned):
             return True
     return False
 
+def get_bytes_from_image(data):
+    is_success, im_buf_arr = cv2.imencode(".jpg", data)
+    byte_im = im_buf_arr.tobytes()
+    return byte_im
+
+def upload_files_to_storage(im_orig,im_rotated,vote):
+    filename = str(uuid.uuid4()) + '.jpg'
+    origFileUrl = upload_to_file_storage(im_orig,'originals',filename)
+    voteRecognizedFileUrl = upload_to_file_storage(im_rotated,'vote-'+vote,filename)
+    return origFileUrl,voteRecognizedFileUrl
+    
+def upload_to_file_storage(data,container_name,dest_file_name):
+    connect_str = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
+    blob_service_client = BlobServiceClient.from_connection_string(connect_str)
+    blob_client = blob_service_client.get_blob_client(container=container_name, blob=dest_file_name)
+    blob_client.upload_blob(get_bytes_from_image(data))
+    return blob_client.url
+
 def get_vote_from_document(im_orig):
     
     #im_orig = cv2.imread(source_file)
@@ -480,4 +507,8 @@ def get_vote_from_document(im_orig):
 
     isValid = get_if_document_valid(vote,isSigned)
 
-    return vote, isSigned, isValid
+    origFileUrl,voteRecognizedFileUrl = upload_files_to_storage(im_orig,im_rotated,vote)
+
+    return vote, isSigned, isValid, origFileUrl,voteRecognizedFileUrl
+        
+        
