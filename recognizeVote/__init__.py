@@ -604,7 +604,6 @@ def create_task(vote, isSigned, isValid, origFileUrl,voteRecognizedFileUrl,lat,l
     task.latitude = lat
     task.longitude = lng
     task.dateTimeOriginal = date_time_original
-    # add file datetime
     return task
 
 
