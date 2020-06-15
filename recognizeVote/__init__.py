@@ -13,6 +13,9 @@ import json
 from azure.storage.blob import BlobServiceClient
 from azure.cosmosdb.table.tableservice import TableService
 from azure.cosmosdb.table.models import Entity
+from PIL import Image
+from PIL.ExifTags import TAGS, GPSTAGS
+import io
 
 import logging
 
@@ -22,30 +25,125 @@ import azure.functions as func
 def main(req: func.HttpRequest) -> func.HttpResponse:
     logging.info('Python HTTP trigger function processed a request.')
 
-    img = get_image_from_body(req)
-
-    vote, isSigned, isValid, origFileUrl,voteRecognizedFileUrl = get_vote_from_document(img)
-
-    message = prepare_json_message(vote,isSigned, isValid, origFileUrl,voteRecognizedFileUrl)
+    image_bytes = req.get_body()
+    message = get_vote_from_document(image_bytes)
 
     return func.HttpResponse(message, status_code=200)
 
-def get_image_from_body(req):
+def convert_img_bytes_to_cv2_img(image_bytes):
 
-    image_bytes = req.get_body()
     img_nparr = np.frombuffer(image_bytes, dtype=np.uint8)
     img = cv2.imdecode(img_nparr, cv2.IMREAD_COLOR)
-    
     return img
 
-def prepare_json_message(vote,isSigned,isValid,origFileUrl,voteRecognizedFileUrl):
+def prepare_json_message(vote,isSigned,isValid,origFileUrl,voteRecognizedFileUrl,lat,lng,date_time):
     message = {}
     message['vote'] = vote
     message['signed'] = isSigned
     message['valid'] = isValid
     message['origFileUrl'] = origFileUrl
     message['voteRecognizedFileUrl'] = voteRecognizedFileUrl
+    message['latitude'] = lat
+    message['longitude'] = lng
+    message['dateTimeOriginal'] = date_time
     return json.dumps(message)
+
+class ImageMetaData(object):
+    '''
+    Extract the exif data from any image. Data includes GPS coordinates, 
+    Focal Length, Manufacture, and more.
+    '''
+    exif_data = None
+    image = None
+
+    def __init__(self, img_data):
+        self.image = Image.open(io.BytesIO(img_data))
+        #print(self.image._getexif())
+        self.get_exif_data()
+        super(ImageMetaData, self).__init__()
+
+    def get_exif_data(self):
+        """Returns a dictionary from the exif data of an PIL Image item. Also converts the GPS Tags"""
+        exif_data = {}
+        info = self.image._getexif()
+        if info:
+            for tag, value in info.items():
+                decoded = TAGS.get(tag, tag)
+                if decoded == "GPSInfo":
+                    gps_data = {}
+                    for t in value:
+                        sub_decoded = GPSTAGS.get(t, t)
+                        gps_data[sub_decoded] = value[t]
+
+                    exif_data[decoded] = gps_data
+                else:
+                    exif_data[decoded] = value
+        self.exif_data = exif_data
+        return exif_data
+
+    def get_if_exist(self, data, key):
+        if key in data:
+            return data[key]
+        return None
+
+    def convert_to_degress(self, value):
+
+        """Helper function to convert the GPS coordinates 
+        stored in the EXIF to degress in float format"""
+        d0 = value[0][0]
+        d1 = value[0][1]
+        d = float(d0) / float(d1)
+
+        m0 = value[1][0]
+        m1 = value[1][1]
+        m = float(m0) / float(m1)
+
+        s0 = value[2][0]
+        s1 = value[2][1]
+        s = float(s0) / float(s1)
+
+        return d + (m / 60.0) + (s / 3600.0)
+
+    def get_lat_lng(self):
+        """Returns the latitude and longitude, if available, from the provided exif_data (obtained through get_exif_data above)"""
+        lat = None
+        lng = None
+        exif_data = self.get_exif_data()
+        #print(exif_data)
+        if "GPSInfo" in exif_data:      
+            gps_info = exif_data["GPSInfo"]
+            gps_latitude = self.get_if_exist(gps_info, "GPSLatitude")
+            gps_latitude_ref = self.get_if_exist(gps_info, 'GPSLatitudeRef')
+            gps_longitude = self.get_if_exist(gps_info, 'GPSLongitude')
+            gps_longitude_ref = self.get_if_exist(gps_info, 'GPSLongitudeRef')
+            if gps_latitude and gps_latitude_ref and gps_longitude and gps_longitude_ref:
+                lat = self.convert_to_degress(gps_latitude)
+                if gps_latitude_ref != "N":                     
+                    lat = 0 - lat
+                lng = self.convert_to_degress(gps_longitude)
+                if gps_longitude_ref != "E":
+                    lng = 0 - lng
+        return lat, lng
+    
+    def get_date_time_original(self):
+        """Returns the date and time when photo was taken, if available, from the provided exif_data (obtained through get_exif_data above)"""
+        exif_data = self.get_exif_data()
+        if "DateTimeOriginal" in exif_data:
+            date_and_time = self.exif_data['DateTimeOriginal']
+            return date_and_time     
+
+def get_meta_data_from_image(img_bytes):
+    lat,lng = get_img_location(img_bytes)
+    date_time = get_img_datetime(img_bytes)
+    return lat,lng,date_time
+
+def get_img_location(img_bytes):
+    meta_data =  ImageMetaData(img_bytes)
+    return meta_data.get_lat_lng()
+
+def get_img_datetime(img_bytes):
+    meta_data =  ImageMetaData(img_bytes)
+    return meta_data.get_date_time_original()    
 
 def order_points(pts):
     # initialzie a list of coordinates that will be ordered
@@ -488,13 +586,13 @@ def upload_to_file_storage(data,container_name,dest_file_name):
     blob_client.upload_blob(get_bytes_from_image(data))
     return blob_client.url
 
-def save_vote_to_azure_table(vote, isSigned, isValid, origFileUrl,voteRecognizedFileUrl,name_id):
+def save_vote_to_azure_table(vote, isSigned, isValid, origFileUrl,voteRecognizedFileUrl,lat,lng,date_time_original,name_id):
     connect_str = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
     table_service = TableService(connection_string=connect_str)
-    task = create_task(vote, isSigned, isValid, origFileUrl,voteRecognizedFileUrl,name_id)
+    task = create_task(vote, isSigned, isValid, origFileUrl,voteRecognizedFileUrl,lat,lng,date_time_original,name_id)
     table_service.insert_entity('voteresults', task)
 
-def create_task(vote, isSigned, isValid, origFileUrl,voteRecognizedFileUrl,name_id):
+def create_task(vote, isSigned, isValid, origFileUrl,voteRecognizedFileUrl,lat,lng,date_time_original,name_id):
     task = Entity()
     task.PartitionKey = 'id'
     task.RowKey = name_id
@@ -503,13 +601,18 @@ def create_task(vote, isSigned, isValid, origFileUrl,voteRecognizedFileUrl,name_
     task.valid = isValid
     task.origFileUrl = origFileUrl
     task.voteRecognizedFileUrl = voteRecognizedFileUrl
-    # add file location
+    task.latitude = lat
+    task.longitude = lng
+    task.dateTimeOriginal = date_time_original
     # add file datetime
     return task
 
 
+def get_vote_from_document(img_bytes):
+    
+    lat,lng,date_time_original = get_meta_data_from_image(img_bytes)
 
-def get_vote_from_document(im_orig):
+    im_orig = convert_img_bytes_to_cv2_img(img_bytes)
     
     #im_orig = cv2.imread(source_file)
     
@@ -533,8 +636,10 @@ def get_vote_from_document(im_orig):
 
     origFileUrl,voteRecognizedFileUrl,name_id = upload_files_to_storage(im_orig,im_rotated,vote)
 
-    save_vote_to_azure_table(vote, isSigned, isValid, origFileUrl,voteRecognizedFileUrl,name_id)
+    save_vote_to_azure_table(vote, isSigned, isValid, origFileUrl,voteRecognizedFileUrl,lat,lng,date_time_original,name_id)
 
-    return vote, isSigned, isValid, origFileUrl,voteRecognizedFileUrl
+    message = prepare_json_message(vote,isSigned, isValid, origFileUrl,voteRecognizedFileUrl,lat,lng,date_time_original)
+
+    return message
         
         
