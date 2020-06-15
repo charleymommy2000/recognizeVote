@@ -5,7 +5,6 @@ numpy
 matplotlib
 imutils
 scikit-image
-uuid
 azure-storage-blob
 azure-cosmosdb-table
 pillow
