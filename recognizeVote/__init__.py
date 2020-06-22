@@ -16,6 +16,8 @@ from azure.cosmosdb.table.models import Entity
 from PIL import Image
 from PIL.ExifTags import TAGS, GPSTAGS
 import io
+from io import BytesIO
+from urllib.request import urlopen
 
 import logging
 
@@ -25,10 +27,18 @@ import azure.functions as func
 def main(req: func.HttpRequest) -> func.HttpResponse:
     logging.info('Python HTTP trigger function processed a request.')
 
-    image_bytes = req.get_body()
+    image_bytes = get_image_bytes_from_request(req)
     message = get_vote_from_document(image_bytes)
 
     return func.HttpResponse(message, status_code=200)
+
+def get_image_bytes_from_request(req):
+    image_url = req.params.get('url')
+    if not image_url:
+        image_bytes = req.get_body()
+    else:
+        image_bytes = urlopen(image_url).read()
+    return image_bytes
 
 def convert_img_bytes_to_cv2_img(image_bytes):
 
@@ -547,7 +557,9 @@ def get_signature(image_orig,crop,cropRight,cropBottom):
     filename = str(uuid.uuid4()) + '.png'
     cv2.imwrite(filename, b)
     img = cv2.imread(filename, 0)
-    os.remove(filename)
+    if os.path.exists(filename):
+        os.remove(filename)
+    
     # ensure binary
 
     img_thresh = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)[1]
