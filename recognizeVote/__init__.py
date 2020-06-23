@@ -17,6 +17,7 @@ from PIL import Image
 from PIL.ExifTags import TAGS, GPSTAGS
 import io
 from io import BytesIO
+import urllib.request
 from urllib.request import urlopen
 
 import logging
@@ -555,20 +556,37 @@ def get_signature(image_orig,crop,cropRight,cropBottom):
 
     # save and read the pre-version
     filename = str(uuid.uuid4()) + '.png'
-    cv2.imwrite(filename, b)
-    img = cv2.imread(filename, 0)
-    if os.path.exists(filename):
-        os.remove(filename)
-    
+    signedFileUrl = upload_to_file_storage(b,'signs',filename)
+
+    #cv2.imwrite(filename, b)
+    #img = cv2.imread(filename, 0)
+
+    #if os.path.exists(filename):
+    #    os.remove(filename)
+    #img = cv2.imread(signedFileUrl,0)
+    img = url_to_image(signedFileUrl)
     # ensure binary
+    delete_file_from_storage('signs',filename)
 
     img_thresh = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)[1]
     # save the the result
     #show_image(img_thresh, 'output')
+    #filename = str(uuid.uuid4()) + '.png'
+    #signedFileUrl = upload_to_file_storage(img_thresh,'signs',filename)
+
     contours = get_contours(img_thresh)
     isSigned = len(contours) > 0
     
     return isSigned
+
+def url_to_image(url):
+	# download the image, convert it to a NumPy array, and then read
+	# it into OpenCV format
+	resp = urllib.request.urlopen(url)
+	image = np.asarray(bytearray(resp.read()), dtype="uint8")
+	image = cv2.imdecode(image, cv2.IMREAD_GRAYSCALE)
+	# return the image
+	return image
 
 def get_if_document_valid(vote,isSigned):
 
@@ -584,11 +602,11 @@ def get_bytes_from_image(data):
     byte_im = im_buf_arr.tobytes()
     return byte_im
 
-def upload_files_to_storage(im_orig,im_rotated,vote):
+def upload_files_to_storage(im_orig,im_rotated,isValid,vote):
     name_id = str(uuid.uuid4())
     filename =  name_id + '.jpg'
     origFileUrl = upload_to_file_storage(im_orig,'originals',filename)
-    voteRecognizedFileUrl = upload_to_file_storage(im_rotated,'vote-'+vote,filename)
+    voteRecognizedFileUrl = upload_to_file_storage(im_rotated,'valid-'+str(isValid).lower()+'-'+'vote-'+vote,filename)
     return origFileUrl,voteRecognizedFileUrl,name_id
     
 def upload_to_file_storage(data,container_name,dest_file_name):
@@ -597,6 +615,12 @@ def upload_to_file_storage(data,container_name,dest_file_name):
     blob_client = blob_service_client.get_blob_client(container=container_name, blob=dest_file_name)
     blob_client.upload_blob(get_bytes_from_image(data))
     return blob_client.url
+
+def delete_file_from_storage(container_name,file_name):
+    connect_str = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
+    blob_service_client = BlobServiceClient.from_connection_string(connect_str)
+    blob_client = blob_service_client.get_blob_client(container=container_name, blob=file_name)
+    blob_client.delete_blob()
 
 def save_vote_to_azure_table(vote, isSigned, isValid, origFileUrl,voteRecognizedFileUrl,lat,lng,date_time_original,name_id):
     connect_str = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
@@ -645,7 +669,7 @@ def get_vote_from_document(img_bytes):
 
     isValid = get_if_document_valid(vote,isSigned)
 
-    origFileUrl,voteRecognizedFileUrl,name_id = upload_files_to_storage(im_orig,im_rotated,vote)
+    origFileUrl,voteRecognizedFileUrl,name_id = upload_files_to_storage(im_orig,im_rotated,isValid,vote)
 
     save_vote_to_azure_table(vote, isSigned, isValid, origFileUrl,voteRecognizedFileUrl,lat,lng,date_time_original,name_id)
 
